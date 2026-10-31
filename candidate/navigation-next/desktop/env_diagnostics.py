@@ -7,7 +7,7 @@ from env_reader import parse_line
 
 def diagnose(root, log=None, *, config=None):
     cfg = Path(config) if config else default_openmw_cfg()
-    directory = Path(root) / '_system' / 'openmw_env_050'
+    directory = (Path(root) / '_system' / 'openmw_env_050').resolve()
     report = dict(config=str(cfg), probe=str(directory), log=str(log) if log else None,
                   config_exists=cfg.is_file(), script_exists=(directory / LUA_PATH).is_file(),
                   descriptor_exists=(directory / PROBE_ID).is_file(),

@@ -68,7 +68,8 @@ class HostUpdateTests(unittest.TestCase):
             self.assertEqual(result['status'],'launched')
             self.assertEqual(target.read_bytes(),new)
             self.assertEqual((root/'_system'/'host_backups'/'previous_host.exe').read_bytes(),old)
-            self.assertEqual(called,[target])
+            self.assertEqual(len(called),1)
+            self.assertTrue(os.path.samefile(called[0],target))
     def test_failure_rolls_back(self):
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);target=root/'SILK_Game_Agent.exe';target.write_bytes(fake_pe(b'OLD'))
