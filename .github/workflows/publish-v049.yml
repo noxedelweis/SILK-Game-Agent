@@ -1,0 +1,60 @@
+name: Publish SILK Game Agent v0.4.9
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v049.yml'
+      - 'release-assets/v0.4.9/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release sources
+        uses: actions/checkout@v4
+      - name: Decode and validate binaries
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile
+          sources = Path('release-assets/v0.4.9')
+          output = Path('dist')
+          output.mkdir(exist_ok=True)
+          expected = {
+            'SILK_Game_Agent.exe': 'b275ac9e1b3357dc57e80d7b51b762cf2f92cdef916c09b24d0a02a68ab28060',
+            'SILK_Game_Agent_v0.4.9.zip': 'a9128177e8e79b39fc31998ac0d5dd9fd62bb3243bca4dd2aa2cade0ae84e7f2',
+          }
+          for name,sha in expected.items():
+              encoded=(sources / (name+'.b64')).read_text(encoding='ascii').strip()
+              data=base64.b64decode(encoded,validate=True)
+              got=hashlib.sha256(data).hexdigest()
+              if got != sha: raise RuntimeError(f'{name} digest mismatch: {got}')
+              (output/name).write_bytes(data)
+              print(name, len(data), sha)
+          exe=(output/'SILK_Game_Agent.exe').read_bytes()
+          assert exe[:2]==b'MZ'
+          offset=int.from_bytes(exe[0x3c:0x40],'little')
+          assert exe[offset:offset+6] == b'PE\x00\x00\x64\x86'
+          with zipfile.ZipFile(output/'SILK_Game_Agent_v0.4.9.zip') as zf:
+              assert zf.testzip() is None
+              assert 'SILK_Game_Agent_v0.4.9/knowledge_cli.py' in zf.namelist()
+          PY
+      - name: Publish v0.4.9 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.9 >/dev/null 2>&1; then
+            echo 'v0.4.9 already exists, refusing overwrite'
+            exit 0
+          fi
+          gh release create v0.4.9 \
+            dist/SILK_Game_Agent_v0.4.9.zip \
+            dist/SILK_Game_Agent.exe \
+            --target main \
+            --title 'SILK Game Agent v0.4.9 — One-click OpenMW session' \
+            --notes 'One-click launch of OpenMW + read-only automatic telemetry monitor. The game is not launched twice. Status refreshes in the GUI after fresh SILK_OBS_V03 records following loading a save. Player controls remain disabled until an explicitly approved action. Includes Windows EXE and matching agent ZIP. Not autonomous play.'
