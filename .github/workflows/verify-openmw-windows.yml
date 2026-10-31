@@ -1,0 +1,24 @@
+name: Verify SILK OpenMW process probe on Windows
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/openmw_launch.py'
+      - 'tests/test_openmw_launch.py'
+      - '.github/workflows/verify-openmw-windows.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  win32-probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Native Windows API + foreground-safe process detection
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "src"
+          python -m unittest discover -s tests -p test_openmw_launch.py -v
