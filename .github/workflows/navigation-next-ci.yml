@@ -1,0 +1,37 @@
+name: SILK Navigation Next — candidate validation
+on:
+  push:
+    branches: ['feature/navigation-next-perception-objects']
+    paths: ['candidate/navigation-next/**', '.github/workflows/navigation-next-ci.yml']
+  pull_request:
+    paths: ['candidate/navigation-next/**', '.github/workflows/navigation-next-ci.yml']
+permissions:
+  contents: read
+jobs:
+  python-tests:
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-latest, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - name: Candidate regression tests (excluding integrated release archive)
+        shell: bash
+        run: |
+          cd candidate/navigation-next
+          python - <<'PY'
+          import unittest, importlib, pathlib, sys
+          sys.path.insert(0, str(pathlib.Path('desktop').resolve()))
+          sys.path.insert(0, str(pathlib.Path('tests').resolve()))
+          suite = unittest.TestSuite()
+          for path in sorted(pathlib.Path('tests').glob('test_*.py')):
+              if path.name == 'test_release_archive.py':
+                  continue  # Requires signed paired Release assets, validated at release stage.
+              suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(path.stem)))
+          result = unittest.TextTestRunner(verbosity=1).run(suite)
+          sys.exit(not result.wasSuccessful())
+          PY
