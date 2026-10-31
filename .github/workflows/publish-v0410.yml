@@ -1,0 +1,60 @@
+name: Publish SILK Game Agent v0.4.10
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v0410.yml'
+      - 'release-assets/v0.4.10/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Decode, integrity-check and inspect two release assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,hashlib,zipfile
+          source=Path('release-assets/v0.4.10')
+          dist=Path('dist')
+          dist.mkdir(exist_ok=True)
+          hashes={
+            'SILK_Game_Agent.exe':'cfa1546727b873d1fa1221aadcda9111fb7196e828f638fc6f988bd8b2020ea2',
+            'SILK_Game_Agent_v0.4.10.zip':'8c72940b94b5f2cda168dfc6ddebfaf14eaf2884f9cf00903293e623e9b911ca'
+          }
+          for name, expected in hashes.items():
+            raw=base64.b64decode((source/(name+'.b64')).read_text('ascii').strip(),validate=True)
+            actual=hashlib.sha256(raw).hexdigest()
+            if actual!=expected: raise ValueError(name+' hash mismatch: '+actual)
+            (dist/name).write_bytes(raw)
+            print(name,len(raw),'sha256',actual)
+          exe=(dist/'SILK_Game_Agent.exe').read_bytes()
+          assert exe[:2]==b'MZ'
+          pos=int.from_bytes(exe[60:64],'little')
+          assert exe[pos:pos+4]==b'PE'+bytes([0,0])
+          assert exe[pos+4:pos+6]==bytes.fromhex('6486')
+          with zipfile.ZipFile(dist/'SILK_Game_Agent_v0.4.10.zip') as z:
+            assert z.testzip() is None
+            assert 'SILK_Game_Agent_v0.4.10/knowledge_cli.py' in z.namelist()
+          PY
+      - name: Publish v0.4.10 without overwriting prior releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.10 >/dev/null 2>&1; then
+            echo 'Existing v0.4.10 release; refusing to overwrite.'
+            exit 0
+          fi
+          gh release create v0.4.10 \
+            dist/SILK_Game_Agent_v0.4.10.zip \
+            dist/SILK_Game_Agent.exe \
+            --target main \
+            --title 'SILK Game Agent v0.4.10 — OpenMW Focus Fix' \
+            --notes 'Fix: never launch tasklist.exe from periodic watcher. OpenMW process detection now uses Win32 ToolHelp API without console windows. Improves diagnostics when SILK_OBS_V03 is not present; movement remains disabled unless explicitly approved. Windows CI verified. Keeps local wiki data, Steam saves, OpenMW configuration and main SILK Desktop intact.'
