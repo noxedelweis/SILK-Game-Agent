@@ -1,0 +1,68 @@
+name: Publish SILK Game Agent v0.5.2 (ZIP metadata hotfix)
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v052.yml'
+      - 'release-assets/v0.5.2/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode, integrity-check and validate Windows updater compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile, stat, tempfile, shutil
+          src = Path('release-assets/v0.5.2')
+          dist = Path('dist'); dist.mkdir(exist_ok=True)
+          expected = {
+              'SILK_Game_Agent.exe': '4c694b53724fa2254869ec00685bf2cf3a89ba23e32b67396fbae84141e1970a',
+              'SILK_Game_Agent_v0.5.2.zip': 'c0478191c3b4be7405c8dcc8510650a309c0c35bcd74988da025ad248c28c29d',
+          }
+          for filename, checksum in expected.items():
+              encoded = (src / (filename+'.b64')).read_text(encoding='ascii').strip()
+              data = base64.b64decode(encoded, validate=True)
+              actual = hashlib.sha256(data).hexdigest()
+              assert actual == checksum, f'{filename}: digest mismatch {actual}'
+              (dist / filename).write_bytes(data)
+              print(filename, len(data), 'SHA-256 OK')
+          pe=(dist/'SILK_Game_Agent.exe').read_bytes()
+          pe_offset=int.from_bytes(pe[0x3c:0x40], 'little')
+          assert pe[:2]==b'MZ' and pe[pe_offset:pe_offset+6]==b'PE\x00\x00\x64\x86'
+          root='SILK_Game_Agent_v0.5.2'
+          with zipfile.ZipFile(dist/(root+'.zip')) as archive:
+              assert archive.testzip() is None
+              names=set(archive.namelist())
+              for required in ('knowledge_cli.py', 'knowledge/library.py', 'run_tests.bat', 'tests/test_knowledge.py', 'start_without_ai.bat'):
+                  assert root+'/'+required in names, f'missing {required}'
+              assert len(names)==len(archive.infolist())
+              for info in archive.infolist():
+                  path=info.filename
+                  assert path.startswith(root+'/') and '..' not in path.split('/')
+                  assert not path.startswith('/') and '\\' not in path
+                  mode=info.external_attr>>16
+                  assert stat.S_ISREG(mode) if not info.is_dir() else stat.S_ISDIR(mode), f'incompatible metadata {path}: {oct(mode)}'
+              print(len(names), 'safe regular ZIP files verified')
+          PY
+      - name: Publish paired assets without overwriting previous releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.5.2 >/dev/null 2>&1; then
+            echo 'Release already exists; will not overwrite'
+            exit 0
+          fi
+          gh release create v0.5.2 \
+            dist/SILK_Game_Agent.exe \
+            dist/SILK_Game_Agent_v0.5.2.zip \
+            --target main \
+            --title 'SILK Game Agent v0.5.2 — ZIP Compatibility Hotfix' \
+            --notes 'Fixes rejected v0.5.1 update: previous agent ZIP files had mode 0600 without regular-file type. Rebuilt archive declares each entry as a regular file (0100644), retaining strict symlink/special-file validation. Fully compatible with previously installed updater. Preserves Navigation 2.0, Lua probe diagnostics, OpenMW configuration, saves and 8064-page local wiki. No game files modified during update.'
