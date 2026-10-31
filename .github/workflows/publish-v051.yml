@@ -1,0 +1,56 @@
+name: Publish SILK Game Agent v0.5.1
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v051.yml'
+      - 'release-assets/v0.5.1/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode and verify release binary provenance
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile
+          src=Path('release-assets/v0.5.1')
+          dist=Path('dist');dist.mkdir(exist_ok=True)
+          expected={
+            'SILK_Game_Agent.exe':'9a2224d2aae2ada606b21558be8791fd6bb03e537913d56b4226c2f7e9b99c00',
+            'SILK_Game_Agent_v0.5.1.zip':'c4e2a2cd2b0a1252dc320cfd75bd8e0dffaeaf302687edfe25f0ca3f89f5c1e5',
+          }
+          for file,digest in expected.items():
+            raw=base64.b64decode((src/(file+'.b64')).read_text('ascii').strip(),validate=True)
+            actual=hashlib.sha256(raw).hexdigest()
+            if actual!=digest:raise ValueError(f'{file}: mismatched SHA-256 {actual}')
+            (dist/file).write_bytes(raw)
+            print(file,len(raw),'SHA256 passed')
+          exe=(dist/'SILK_Game_Agent.exe').read_bytes()
+          off=int.from_bytes(exe[0x3c:0x40],'little')
+          assert exe[:2]==b'MZ' and exe[off:off+6]==b'PE\x00\x00\x64\x86'
+          with zipfile.ZipFile(dist/'SILK_Game_Agent_v0.5.1.zip') as arc:
+            assert arc.testzip() is None
+            assert 'SILK_Game_Agent_v0.5.1/knowledge_cli.py' in arc.namelist()
+          PY
+      - name: Publish immutable paired release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.5.1 >/dev/null 2>&1; then
+            echo 'Tag v0.5.1 already exists; never overwrite artifacts'
+            exit 0
+          fi
+          gh release create v0.5.1 \
+            dist/SILK_Game_Agent.exe \
+            dist/SILK_Game_Agent_v0.5.1.zip \
+            --target main \
+            --title 'SILK Game Agent v0.5.1 — Environment Probe Diagnostics' \
+            --notes 'Navigation 2.0 behavior unchanged. The optional read-only Lua environment probe adds startup marker SILK_ENV_BOOT_V051 and isolated error markers, and may safely repair only SILK-owned v0.5.0 Lua script with backup after OpenMW is closed and user consents. Environment inspection now shows log, config, loading diagnostics. Requires live user verification; no autonomous door/NPC interaction. All game saves remain untouched.'
