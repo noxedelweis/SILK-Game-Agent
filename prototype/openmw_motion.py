@@ -13,6 +13,36 @@ import time
 from ctypes import wintypes
 
 
+# Native Windows INPUT must include the largest union member MOUSEINPUT;
+# sizeof(INPUT) is 40 bytes on x64 and 28 on x86.
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [('wVk', ctypes.c_uint16), ('wScan', ctypes.c_uint16),
+                ('dwFlags', ctypes.c_uint32), ('time', ctypes.c_uint32),
+                ('dwExtraInfo', ctypes.c_void_p)]
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [('dx', ctypes.c_int32), ('dy', ctypes.c_int32),
+                ('mouseData', ctypes.c_uint32), ('dwFlags', ctypes.c_uint32),
+                ('time', ctypes.c_uint32), ('dwExtraInfo', ctypes.c_void_p)]
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [('uMsg', ctypes.c_uint32), ('wParamL', ctypes.c_uint16),
+                ('wParamH', ctypes.c_uint16)]
+
+class INPUTUNION(ctypes.Union):
+    _fields_ = [('mi', MOUSEINPUT), ('ki', KEYBDINPUT), ('hi', HARDWAREINPUT)]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [('type', ctypes.c_uint32), ('u', INPUTUNION)]
+
+def validate_input_abi():
+    expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
+    actual = ctypes.sizeof(INPUT)
+    if actual != expected or INPUT.u.offset != (8 if expected == 40 else 4):
+        raise ControlRejected(f'Неверная структура Windows INPUT: {actual} вместо {expected}')
+    return actual
+
+
 class ControlRejected(RuntimeError):
     pass
 
@@ -65,14 +95,7 @@ class Win32Backend:
         self.user32 = ctypes.WinDLL('user32', use_last_error=True)
         self.kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 
-        class KEYBDINPUT(ctypes.Structure):
-            _fields_ = [('wVk', wintypes.WORD), ('wScan', wintypes.WORD),
-                        ('dwFlags', wintypes.DWORD), ('time', wintypes.DWORD),
-                        ('dwExtraInfo', ctypes.c_void_p)]
-        class INPUTUNION(ctypes.Union):
-            _fields_ = [('ki', KEYBDINPUT)]
-        class INPUT(ctypes.Structure):
-            _fields_ = [('type', wintypes.DWORD), ('u', INPUTUNION)]
+        validate_input_abi()
         self.KEYBDINPUT, self.INPUT, self.INPUTUNION = KEYBDINPUT, INPUT, INPUTUNION
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
@@ -117,8 +140,18 @@ class Win32Backend:
         flags = self.KEYEVENTF_SCANCODE | (self.KEYEVENTF_KEYUP if keyup else 0)
         payload = self.INPUT(type=self.INPUT_KEYBOARD,
                              u=self.INPUTUNION(ki=self.KEYBDINPUT(0, scan, flags, 0, None)))
-        if self.user32.SendInput(1, ctypes.byref(payload), ctypes.sizeof(payload)) != 1:
-            raise ControlRejected('Windows не приняла событие клавиатуры')
+        ctypes.set_last_error(0)
+        accepted = self.user32.SendInput(1, ctypes.byref(payload), ctypes.sizeof(payload))
+        if accepted != 1:
+            error = ctypes.get_last_error()
+            if error == 87:
+                hint = 'Windows отклонила структуру INPUT (ошибка 87).'
+            elif error in (5, 0):
+                hint = ('Возможно, OpenMW запущена с более высокими правами или '
+                        'ввод блокируется защитой Windows. Не повышай права SILK автоматически.')
+            else:
+                hint = 'Проверь активное окно и уровень прав OpenMW.'
+            raise ControlRejected(f'Windows SendInput: код {error}. {hint}')
 
     def press_w(self):
         self._send_w(False)
