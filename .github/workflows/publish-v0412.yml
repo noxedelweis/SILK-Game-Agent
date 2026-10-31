@@ -1,0 +1,104 @@
+name: Publish SILK Game Agent v0.4.12
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v0412.yml', 'release-assets/v0.4.12/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  verify-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Verify integrity and Windows telemetry regressions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64,hashlib,zipfile,struct,tempfile,subprocess,sys,os
+          source=Path('release-assets/v0.4.12')
+          dest=Path('dist');dest.mkdir(exist_ok=True)
+          expected={
+            'SILK_Game_Agent.exe':'d3b56beca1ad21e3d1e51d7f5d6e0ec15390c9a6d669bd1fec0e4e6a638903d8',
+            'SILK_Game_Agent_v0.4.12.zip':'69c1181ae3547d7f490b85a42dd183d43dbfdae904677f7c9455d48673c33662'}
+          for name,digest in expected.items():
+              data=base64.b64decode((source/(name+'.b64')).read_text(encoding='ascii').strip(),validate=True)
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              (dest/name).write_bytes(data)
+          exe=(dest/'SILK_Game_Agent.exe').read_bytes()
+          off=struct.unpack_from('<I',exe,0x3c)[0]
+          assert exe[:2]==b'MZ' and exe[off:off+6]==b'PE\x00\x00\x64\x86'
+          tmp=Path(tempfile.mkdtemp(prefix='silk_win_'))
+          with zipfile.ZipFile(dest/'SILK_Game_Agent.exe') as z:
+              for n in ('micro_nav.py','motion_session.py','openmw_motion.py'):
+                  (tmp/n).write_bytes(z.read(n))
+          sys.path.insert(0,str(tmp))
+          from openmw_motion import validate_input_abi, ControlRejected
+          assert validate_input_abi()==40
+          from motion_session import newest_sample,Sample
+          from micro_nav import wait_for_initial_coordinates
+          log=tmp/'openmw.log'
+          log.write_text('SILK_OBS_V03|9|Balmora|1.20|2.40|3.00|40.00',encoding='utf-8')
+          assert newest_sample(log).seq==9
+          tick=[0.0];calls=[0]
+          class Key:
+              def is_emergency_stop(self):return False
+          def reader():
+              calls[0]+=1
+              return Sample(8,'Balmora',2.,3.,4.,40.) if calls[0]>=4 else None
+          def sleep(n):tick[0]+=n
+          assert wait_for_initial_coordinates(log,reader,Key(),clock=lambda:tick[0],sleeper=sleep,
+                     wallclock=lambda:log.stat().st_mtime,timeout=3).seq==8
+          tick[0]=0
+          try:
+              wait_for_initial_coordinates(log,lambda:None,Key(),clock=lambda:tick[0],sleeper=sleep,
+                       wallclock=lambda:log.stat().st_mtime,timeout=1)
+          except ControlRejected as exc:
+              assert 'клавиши не отправлялись' in str(exc)
+          else:raise AssertionError('Missing telemetry must stop')
+          with zipfile.ZipFile(dest/'SILK_Game_Agent_v0.4.12.zip') as z:
+              assert z.testzip() is None
+              z.extractall(tmp/'agent')
+          agent=tmp/'agent'/'SILK_Game_Agent_v0.4.12'
+          subprocess.run([sys.executable,'-m','unittest','discover','-s',str(agent/'tests')],
+                        cwd=agent,env={**os.environ,'PYTHONPATH':str(agent)},check=True)
+          print('Windows verification passed')
+          PY
+  publish:
+    needs: verify-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode verified assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,hashlib
+          src=Path('release-assets/v0.4.12');dst=Path('dist');dst.mkdir(exist_ok=True)
+          expected={'SILK_Game_Agent.exe':'d3b56beca1ad21e3d1e51d7f5d6e0ec15390c9a6d669bd1fec0e4e6a638903d8',
+            'SILK_Game_Agent_v0.4.12.zip':'69c1181ae3547d7f490b85a42dd183d43dbfdae904677f7c9455d48673c33662'}
+          for name,sha in expected.items():
+              data=base64.b64decode((src/(name+'.b64')).read_text().strip(),validate=True)
+              assert hashlib.sha256(data).hexdigest()==sha
+              (dst/name).write_bytes(data)
+          PY
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.12 >/dev/null 2>&1; then
+            echo 'Already published: not overwriting existing release'
+            exit 0
+          fi
+          gh release create v0.4.12 \
+            dist/SILK_Game_Agent.exe \
+            dist/SILK_Game_Agent_v0.4.12.zip \
+            --target main \
+            --title 'SILK Game Agent v0.4.12 — Telemetry Wait Fix' \
+            --notes 'Fixes immediate No OpenMW coordinates in Micro Navigation. Waits up to 12s for first valid Lua sample, distinguishes stale logs/probe errors, and never moves without telemetry. Keeps the 8064-page wiki, OpenMW configuration, and saves unchanged.'
