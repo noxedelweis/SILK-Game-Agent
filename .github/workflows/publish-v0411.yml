@@ -1,0 +1,57 @@
+name: Publish SILK Game Agent v0.4.11
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v0411.yml'
+      - 'release-assets/v0.4.11/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode, integrity-check and inspect both release assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile, io
+          source=Path('release-assets/v0.4.11')
+          dest=Path('dist');dest.mkdir(exist_ok=True)
+          expected={
+            'SILK_Game_Agent.exe':'928d76a52e2569a654c317eb9e4c83a69d77457e407143ddfd3f719f064ff2e1',
+            'SILK_Game_Agent_v0.4.11.zip':'9f5359eb6b2da1d7ef9f143ec76ceef22bf1bce304695ce75228635bdbd14528',
+          }
+          for filename,checksum in expected.items():
+              content=(source/(filename+'.b64')).read_text(encoding='ascii').strip()
+              data=base64.b64decode(content,validate=True)
+              digest=hashlib.sha256(data).hexdigest()
+              if digest!=checksum:raise RuntimeError(f'{filename}: SHA-256 mismatch {digest}')
+              (dest/filename).write_bytes(data)
+              print(filename,len(data),'SHA-256 OK')
+          exe=(dest/'SILK_Game_Agent.exe').read_bytes()
+          offset=int.from_bytes(exe[0x3c:0x40],'little')
+          assert exe[:2]==b'MZ' and exe[offset:offset+6]==b'PE\0\0\x64\x86', 'Not a Windows x64 executable'
+          with zipfile.ZipFile(dest/'SILK_Game_Agent_v0.4.11.zip') as z:
+              assert z.testzip() is None
+              assert 'SILK_Game_Agent_v0.4.11/knowledge_cli.py' in z.namelist()
+          PY
+      - name: Publish v0.4.11 with both assets (never overwrite existing tag)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.11 >/dev/null 2>&1; then
+            echo 'v0.4.11 already exists, refusing to overwrite'
+            exit 0
+          fi
+          gh release create v0.4.11 \
+            dist/SILK_Game_Agent.exe \
+            dist/SILK_Game_Agent_v0.4.11.zip \
+            --target main \
+            --title 'SILK Game Agent v0.4.11 — Micro Navigation' \
+            --notes 'Experimental supervised local waypoint movement (X,Y). Two calibration pulses W/D, up to six bounded WASD corrections, updated coordinate checks, user confirmation, ESC/focus-loss stop. Does NOT navigate full quests, avoid obstacles or prove command causality. Existing OpenMW mod, settings, saves and SILK Desktop remain unchanged.'
