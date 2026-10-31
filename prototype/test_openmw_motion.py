@@ -1,5 +1,6 @@
 import unittest
-from openmw_motion import StepController, ControlRejected
+from openmw_motion import StepController, ControlRejected, INPUT, INPUTUNION, MOUSEINPUT, KEYBDINPUT, HARDWAREINPUT, validate_input_abi
+import ctypes
 
 class Clock:
     def __init__(self): self.t = 10.0
@@ -18,6 +19,16 @@ class TestMovement(unittest.TestCase):
     def make(self, kb):
         c=Clock()
         return StepController(kb, sleeper=c.sleep, clock=c.now)
+    def test_windows_input_abi_full_union(self):
+        self.assertEqual(validate_input_abi(), 40 if ctypes.sizeof(ctypes.c_void_p)==8 else 28)
+        self.assertEqual(ctypes.sizeof(INPUTUNION), ctypes.sizeof(MOUSEINPUT))
+        self.assertEqual(ctypes.sizeof(INPUT), 40 if ctypes.sizeof(ctypes.c_void_p)==8 else 28)
+        self.assertEqual(INPUT.u.offset, 8 if ctypes.sizeof(ctypes.c_void_p)==8 else 4)
+    def test_keyboard_input_is_smaller_than_mouse_on_win64(self):
+        if ctypes.sizeof(ctypes.c_void_p)==8:
+            self.assertEqual(ctypes.sizeof(KEYBDINPUT), 24)
+            self.assertEqual(ctypes.sizeof(MOUSEINPUT), 32)
+            self.assertEqual(ctypes.sizeof(HARDWAREINPUT), 8)
     def test_consent(self):
         kb=Keyboard()
         with self.assertRaises(ControlRejected): self.make(kb).forward()
