@@ -87,7 +87,7 @@ def install_probe(root, *, config=None, running=None, confirm=False, now=time.ti
     repaired = False
     for f, data in ((descriptor,new_descriptor),(script,new_script)):
         if f.exists() and f.read_bytes()!=data:
-            if f == script and f.read_bytes() == LUA_SOURCE_LEGACY.encode('utf-8'):
+            if f == script and f.read_bytes().replace(b'\r\n', b'\n') == LUA_SOURCE_LEGACY.encode('utf-8'):
                 backup_lua = f.with_name(f.name+'.silk-v050-backup')
                 if backup_lua.exists() and backup_lua.read_bytes() != f.read_bytes():
                     raise ControlRejected('Резервный Lua-файл изменён, восстановление отменено')

@@ -48,6 +48,16 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(file.read_text('utf-8'),LUA_SOURCE)
         self.assertEqual(file.with_name(file.name+'.silk-v050-backup').read_text('utf-8'),LUA_SOURCE_LEGACY)
         self.assertEqual(self.cfg.read_bytes(),before)
+    def test_crlf_old_script_is_recognized_but_preserved_in_backup(self):
+        self.install()
+        script=self.root/'_system/openmw_env_050'/LUA_PATH
+        previous=LUA_SOURCE_LEGACY.replace('\n','\r\n').encode('utf-8')
+        script.write_bytes(previous)
+        result=self.install()
+        self.assertEqual(result['status'],'repaired')
+        self.assertEqual(script.with_name(script.name+'.silk-v050-backup').read_bytes(),previous)
+        self.assertEqual(script.read_text('utf-8'),LUA_SOURCE)
+
     def test_never_modify_custom_script(self):
         self.install()
         file=self.root/'_system/openmw_env_050'/LUA_PATH
