@@ -1,0 +1,60 @@
+name: Publish SILK Game Agent v0.4.6
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v046.yml'
+      - 'release-assets/v0.4.6/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout signed-in repository
+        uses: actions/checkout@v4
+      - name: Decode and verify release binaries
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, zipfile
+          source = Path('release-assets/v0.4.6')
+          output = Path('dist')
+          output.mkdir(exist_ok=True)
+          expected = {
+              'SILK_Game_Agent.exe': '4d74f8ae921739199dbcb8455268c51e685ab983db0d7d7981a9b1eb63fdb21a',
+              'SILK_Game_Agent_v0.4.6.zip': 'df0c760bac83395b6821cb5ffc6c454a06d6f58823e4302a697d78fe49656250',
+          }
+          for filename, digest in expected.items():
+              text = (source / (filename + '.b64')).read_text(encoding='ascii').strip()
+              binary = base64.b64decode(text, validate=True)
+              actual = hashlib.sha256(binary).hexdigest()
+              if actual != digest:
+                  raise RuntimeError(f'{filename}: SHA-256 mismatch: {actual}')
+              (output / filename).write_bytes(binary)
+              print(f'{filename}: SHA-256 verified, {len(binary)} bytes')
+          exe = (output / 'SILK_Game_Agent.exe').read_bytes()
+          pe_offset = int.from_bytes(exe[0x3c:0x40], 'little')
+          assert exe[:2] == b'MZ' and exe[pe_offset:pe_offset+6] == b'PE\x00\x00\x64\x86'
+          with zipfile.ZipFile(output / 'SILK_Game_Agent_v0.4.6.zip') as archive:
+              assert archive.testzip() is None
+              assert 'SILK_Game_Agent_v0.4.6/knowledge_cli.py' in archive.namelist()
+          PY
+      - name: Publish immutable release (never overwrite assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.6 >/dev/null 2>&1; then
+            echo 'v0.4.6 already published; not overwriting release'
+            exit 0
+          fi
+          gh release create v0.4.6 \
+            dist/SILK_Game_Agent_v0.4.6.zip \
+            dist/SILK_Game_Agent.exe \
+            --target main \
+            --title 'SILK Game Agent v0.4.6 — First Step' \
+            --notes 'Experimental first controlled OpenMW movement. Includes the matching Windows GUI EXE and agent code. A short W press requires user confirmation and checks OpenMW focus; movement is reported as confirmed only when fresh OpenMW telemetry supports it. This is not autonomous play.'
