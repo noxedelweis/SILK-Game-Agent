@@ -1,0 +1,58 @@
+name: Publish SILK Game Agent v0.4.7
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v047.yml'
+      - 'release-assets/v0.4.7/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Decode and verify SHA-256 and executable contents
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, zipfile
+          from pathlib import Path
+          source=Path('release-assets/v0.4.7')
+          dest=Path('dist')
+          dest.mkdir(exist_ok=True)
+          wanted={
+              'SILK_Game_Agent.exe':'7edb3c8692196da7f4347324e8737e741ed8a63c549a2a3865fedf5cfc574b56',
+              'SILK_Game_Agent_v0.4.7.zip':'8aee3c9ecd856a2f4abceae1fc2ef342abf7acf03185c5f9c43a1ac501b99f38'
+          }
+          for name,expected in wanted.items():
+              data=base64.b64decode((source/(name+'.b64')).read_text(encoding='ascii').strip(),validate=True)
+              actual=hashlib.sha256(data).hexdigest()
+              if actual!=expected: raise ValueError(f'{name}: SHA mismatch {actual}')
+              (dest/name).write_bytes(data)
+              print(name,len(data),actual)
+          exe=(dest/'SILK_Game_Agent.exe').read_bytes()
+          peoff=int.from_bytes(exe[0x3c:0x40],'little')
+          assert exe[:2]==b'MZ' and exe[peoff:peoff+6]==b'PE\x00\x00\x64\x86'
+          with zipfile.ZipFile(dest/'SILK_Game_Agent_v0.4.7.zip') as zf:
+              assert zf.testzip() is None
+              assert 'SILK_Game_Agent_v0.4.7/knowledge_cli.py' in zf.namelist()
+          PY
+      - name: Publish release with both assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.7 >/dev/null 2>&1; then
+            echo 'v0.4.7 already exists; refuse to overwrite'
+            exit 1
+          fi
+          gh release create v0.4.7 \
+            dist/SILK_Game_Agent_v0.4.7.zip \
+            dist/SILK_Game_Agent.exe \
+            --target main \
+            --title 'SILK Game Agent v0.4.7 — Windows SendInput fix' \
+            --notes 'Fixes 64-bit Win32 INPUT structure size (40 bytes) for OpenMW first movement. Provides diagnostic Windows error code and regression tests. No change to the existing OpenMW Lua mod or player saves. This is still a controlled, user-approved one-step experiment.'
