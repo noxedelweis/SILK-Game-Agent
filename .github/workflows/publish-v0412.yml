@@ -64,7 +64,7 @@ jobs:
               z.extractall(tmp/'agent')
           agent=tmp/'agent'/'SILK_Game_Agent_v0.4.12'
           subprocess.run([sys.executable,'-m','unittest','discover','-s',str(agent/'tests')],
-                        cwd=agent,env={**os.environ,'PYTHONPATH':str(agent)},check=True)
+                        cwd=agent,env={**os.environ,'PYTHONPATH':str(agent),'PYTHONIOENCODING':'utf-8:backslashreplace'},check=True)
           print('Windows verification passed')
           PY
   publish:
